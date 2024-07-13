@@ -1,0 +1,426 @@
+import pandas as pd
+import json
+from jinja2 import Template
+
+# Read Excel files
+failures_df = pd.read_excel('failures.xlsx')
+production_df = pd.read_excel('production.xlsx')
+
+# Create a mapping for shift codes to letters
+shift_mapping = {'01': 'A', '02': 'B', '03': 'C'}
+
+# Apply the shift mapping to the production data
+production_df['Shift'] = production_df['SHIFT_CODE'].map(shift_mapping)
+
+# Apply the station mapping to the production data
+production_df['Station'] = production_df['OPERATION_NAME']
+
+# Sort the production data by the order
+production_df = production_df.sort_values('OPERATION_NAME')
+
+# Convert dates to string format
+failures_df['Date'] = pd.to_datetime(failures_df['Date']).dt.strftime('%Y-%m-%d')
+production_df['SHIFT_DATE'] = pd.to_datetime(production_df['SHIFT_DATE']).dt.strftime('%Y-%m-%d')
+
+# Convert dataframes to JSON for embedding in HTML
+failures_json = failures_df.to_json(orient='records')
+production_json = production_df.to_json(orient='records')
+
+# HTML template with embedded data and JavaScript
+html_template = Template('''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Production Quality Dashboard by Duy Nguyen</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+        .chart-container { width: 80%; height: 400px; margin: 20px auto; }
+        .filter-container { margin-bottom: 20px; }
+        .summary-container { display: flex; justify-content: space-around; margin-bottom: 20px; }
+        .summary-box { border: 1px solid #ddd; padding: 20px; border-radius: 5px; text-align: center; width: 30%; }
+        .summary-box h2 { margin: 0 0 10px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        select[multiple] { width: 200px; height: 100px; }
+    </style>
+</head>
+<body>
+    <h1>Interactive Production Quality Dashboard by Duy Nguyen</h1>
+    
+    <div class="filter-container">
+        <label for="startDate">Start Date:</label>
+        <input type="date" id="startDate" onchange="updateDashboard()">
+
+        <label for="endDate">End Date:</label>
+        <input type="date" id="endDate" onchange="updateDashboard()">
+
+        <label for="shiftSelect">Shift:</label>
+        <select id="shiftSelect" multiple onchange="updateDashboard()">
+        </select>
+
+        <label for="modelSelect">Model:</label>
+        <select id="modelSelect" multiple onchange="updateDashboard()">
+        </select>
+
+        <label for="stationSelect">Station:</label>
+        <select id="stationSelect" multiple onchange="updateDashboard()">
+        </select>
+
+        <label for="locationSelect">Location:</label>
+        <select id="locationSelect" multiple onchange="updateDashboard()">
+        </select>
+
+        <label for="problemSelect">Problem Description:</label>
+        <select id="problemSelect" multiple onchange="updateDashboard()">
+        </select>
+    </div>
+
+    <div class="summary-container">
+        <div class="summary-box">
+            <h2>Total Failures</h2>
+            <p id="totalFailures">0</p>
+        </div>
+        <div class="summary-box">
+            <h2>Production Output</h2>
+            <p id="productionOutput">0</p>
+        </div>
+        <div class="summary-box">
+            <h2>Failures Percentage</h2>
+            <p id="failuresPercentage">0%</p>
+        </div>
+    </div>
+
+    <div class="chart-container">
+        <canvas id="mainChart"></canvas>
+    </div>
+
+    <h2>Failure Data</h2>
+    <table id="failureTable">
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>Shift</th>
+                <th>Model</th>
+                <th>Station</th>
+                <th>Location</th>
+                <th>Problem Description</th>
+                <th>Total</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <script>
+        // Embed data from Python
+        const failuresData = {{ failures_json|safe }};
+        const productionData = {{ production_json|safe }};
+
+        console.log('Failures Data:', failuresData);
+        console.log('Production Data:', productionData);
+
+        let mainChart;
+
+        function initializeDashboard() {
+            console.log('Initializing Dashboard');
+            populateFilters();
+            createMainChart();
+            updateDashboard();
+        }
+
+        function populateFilters() {
+            console.log('Populating Filters');
+            const shiftSelect = document.getElementById('shiftSelect');
+            const modelSelect = document.getElementById('modelSelect');
+            const stationSelect = document.getElementById('stationSelect');
+            const locationSelect = document.getElementById('locationSelect');
+            const problemSelect = document.getElementById('problemSelect');
+            
+            const shifts = [...new Set(failuresData.map(item => item.Shift))];
+            const models = [...new Set(failuresData.map(item => item.Model))];
+            const stations = [...new Set(failuresData.map(item => item.Station))];
+            const locations = [...new Set(failuresData.map(item => item.Location))];
+            const problems = [...new Set(failuresData.map(item => item['Problem Description']))];
+
+            console.log('Shifts:', shifts);
+            console.log('Models:', models);
+            console.log('Stations:', stations);
+            console.log('Locations:', locations);
+            console.log('Problems:', problems);
+
+            populateSelect(shiftSelect, shifts);
+            populateSelect(modelSelect, models);
+            populateSelect(stationSelect, stations);
+            populateSelect(locationSelect, locations);
+            populateSelect(problemSelect, problems);
+
+            // Set date range
+            const dates = failuresData.map(item => item.Date).filter(date => date);
+            console.log('Dates:', dates);
+            if (dates.length > 0) {
+                document.getElementById('startDate').value = dates.reduce((a, b) => a < b ? a : b);
+                document.getElementById('endDate').value = dates.reduce((a, b) => a > b ? a : b);
+            }
+        }
+
+        function populateSelect(selectElement, options) {
+            selectElement.innerHTML = ''; // Clear existing options
+            options.forEach(option => {
+                if (option) {
+                    const optionElement = document.createElement('option');
+                    optionElement.value = optionElement.textContent = option;
+                    selectElement.appendChild(optionElement);
+                }
+            });
+        }
+
+        function createMainChart() {
+    console.log('Creating Main Chart');
+    Chart.register(ChartDataLabels);
+    const ctx = document.getElementById('mainChart').getContext('2d');
+    mainChart = new Chart(ctx, {
+        type: 'bar',
+        plugins: [ChartDataLabels],
+        data: {
+            datasets: [
+                {
+                    label: 'Total Failures',
+                    type: 'bar',
+                    yAxisID: 'y-axis-1',
+                    backgroundColor: 'rgba(75, 192, 192, 0.6)',
+                    borderColor: 'rgba(75, 192, 192, 1)',
+                    borderWidth: 1,
+                    datalabels: {
+                        align: 'end',
+                        anchor: 'end'
+                    }
+                },
+                {
+                    label: 'Failure Percentage',
+                    type: 'line',
+                    yAxisID: 'y-axis-2',
+                    borderColor: 'rgba(255, 99, 132, 1)',
+                    borderWidth: 2,
+                    fill: false,
+                    datalabels: {
+                        display: false  // Hide data labels for percentage line
+                    }
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            layout: {
+                padding: {
+                    top: 20, // Add padding to the top to create space for the legend
+                    right: 20,
+                    bottom: 20,
+                    left: 20
+                }
+            },
+            scales: {
+                x: {
+                    type: 'category',
+                    title: {
+                        display: true,
+                        text: 'Date'
+                    },
+                    grid: {
+                        display: false
+                    }
+                },
+                'y-axis-1': {
+                    type: 'linear',
+                    position: 'left',
+                    title: {
+                        display: true,
+                        text: 'Total Failures'
+                    },
+                    grid: {
+                        display: false
+                    },
+                    beginAtZero: true
+                },
+                'y-axis-2': {
+                    type: 'linear',
+                    position: 'right',
+                    title: {
+                        display: true,
+                        text: 'Failure Percentage'
+                    },
+                    grid: {
+                        display: false
+                    },
+                    ticks: {
+                        callback: function(value) {
+                            return value.toFixed(2) + '%';
+                        }
+                    },
+                    beginAtZero: true
+                }
+            },
+            plugins: {
+                legend: {
+                    position: 'top', // Move the legend to the top
+                    labels: {
+                        padding: 20 // Add padding between the legend items
+                    }
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            let label = context.dataset.label || '';
+                            if (label) {
+                                label += ': ';
+                            }
+                            if (context.datasetIndex === 0) {
+                                label += context.parsed.y;
+                            } else {
+                                label += context.parsed.y.toFixed(2) + '%';
+                            }
+                            return label;
+                        }
+                    }
+                },
+                datalabels: {
+                    color: 'black',
+                    font: {
+                        weight: 'bold'
+                    },
+                    formatter: function(value, context) {
+                        if (context.datasetIndex === 0) {
+                            return value;
+                        }
+                        return null;  // Return null for percentage line to hide labels
+                    }
+                }
+            }
+        }
+    });
+}
+
+        function updateDashboard() {
+            console.log('Updating Dashboard');
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+            const shifts = Array.from(document.getElementById('shiftSelect').selectedOptions).map(option => option.value);
+            const models = Array.from(document.getElementById('modelSelect').selectedOptions).map(option => option.value);
+            const stations = Array.from(document.getElementById('stationSelect').selectedOptions).map(option => option.value);
+            const locations = Array.from(document.getElementById('locationSelect').selectedOptions).map(option => option.value);
+            const problems = Array.from(document.getElementById('problemSelect').selectedOptions).map(option => option.value);
+
+            console.log('Filters:', { startDate, endDate, shifts, models, stations, locations, problems });
+
+            const filteredFailures = failuresData.filter(item => 
+                item.Date >= startDate && item.Date <= endDate &&
+                (shifts.length === 0 || shifts.includes(item.Shift)) &&
+                (models.length === 0 || models.includes(item.Model)) &&
+                (stations.length === 0 || stations.includes(item.Station)) &&
+                (locations.length === 0 || locations.includes(item.Location)) &&
+                (problems.length === 0 || problems.includes(item['Problem Description']))
+            );
+
+            const filteredProduction = productionData.filter(item =>
+                item.SHIFT_DATE >= startDate && item.SHIFT_DATE <= endDate &&
+                (shifts.length === 0 || shifts.includes(item.Shift)) &&
+                (models.length === 0 || models.includes(item.PRODUCT_NAME)) &&
+                item.OPERATION_NAME === 'Pack2Box'
+            );
+
+            console.log('Filtered Failures:', filteredFailures);
+            console.log('Filtered Production:', filteredProduction);
+
+            updateSummaryBoxes(filteredFailures, filteredProduction);
+            updateMainChart(filteredFailures, filteredProduction);
+            updateFailureTable(filteredFailures);
+        }
+
+        function updateSummaryBoxes(failures, production) {
+            console.log('Updating Summary Boxes');
+            const totalFailures = failures.reduce((sum, item) => sum + (parseInt(item.Total) || 0), 0);
+            const productionOutput = production.reduce((sum, item) => sum + (parseInt(item.PASS) || 0), 0);
+            const failuresPercentage = productionOutput > 0 ? (totalFailures / productionOutput) * 100 : 0;
+
+            document.getElementById('totalFailures').textContent = totalFailures;
+            document.getElementById('productionOutput').textContent = productionOutput;
+            document.getElementById('failuresPercentage').textContent = failuresPercentage.toFixed(2) + '%';
+
+            console.log('Summary Data:', { totalFailures, productionOutput, failuresPercentage });
+        }
+
+        function updateMainChart(failures, production) {
+            console.log('Updating Main Chart');
+            const dateMap = new Map();
+            
+            failures.forEach(item => {
+                const date = item.Date;
+                if (!dateMap.has(date)) {
+                    dateMap.set(date, { total: 0, pass: 0 });
+                }
+                dateMap.get(date).total += parseInt(item.Total) || 0;
+            });
+
+            production.forEach(item => {
+                const date = item.SHIFT_DATE;
+                if (dateMap.has(date)) {
+                    dateMap.get(date).pass += parseInt(item.PASS) || 0;
+                }
+            });
+
+            const labels = Array.from(dateMap.keys());
+            const totalFailures = labels.map(date => dateMap.get(date).total);
+            const failurePercentages = labels.map(date => {
+                const { total, pass } = dateMap.get(date);
+                return pass > 0 ? (total / pass) * 100 : 0;
+            });
+
+            console.log('Chart Data:', { labels, totalFailures, failurePercentages });
+
+            // Find the maximum percentage value
+            const maxPercentage = Math.max(...failurePercentages);
+            
+            // Update the y-axis-2 max value
+            mainChart.options.scales['y-axis-2'].max = Math.ceil(maxPercentage / 10) * 10;
+
+            mainChart.data.labels = labels;
+            mainChart.data.datasets[0].data = totalFailures;
+            mainChart.data.datasets[1].data = failurePercentages;
+            mainChart.update();
+        }
+
+        function updateFailureTable(data) {
+            console.log('Updating Failure Table');
+            const tableBody = document.querySelector('#failureTable tbody');
+            tableBody.innerHTML = '';
+
+            data.forEach(item => {
+                const row = tableBody.insertRow();
+                ['Date', 'Shift', 'Model', 'Station', 'Location', 'Problem Description', 'Total'].forEach(key => {
+                    const cell = row.insertCell();
+                    cell.textContent = item[key];
+                });
+            });
+        }
+
+        // Initialize the dashboard when the page loads
+        window.onload = initializeDashboard;
+    </script>
+</body>
+</html>
+''')
+
+# Render the template with the embedded data
+output_html = html_template.render(
+    failures_json=failures_json,
+    production_json=production_json
+)
+
+# Write the output to a file
+with open('production_dashboard.html', 'w', encoding='utf-8') as f:
+    f.write(output_html)
+
+print("Dashboard HTML file has been generated as 'production_dashboard.html'")
